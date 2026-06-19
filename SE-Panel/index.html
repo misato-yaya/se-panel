@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>SE Panel</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1e1e1e;color:#d4d4d4;font-family:-apple-system,"Hiragino Sans","Yu Gothic",sans-serif;font-size:12px;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+.header{background:#2a2a2a;border-bottom:1px solid #444;padding:8px 10px;display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.header-row{display:flex;align-items:center;gap:8px}
+.header-label{color:#999;font-size:11px;white-space:nowrap}
+.folder-path{flex:1;background:#333;border:1px solid #555;border-radius:3px;padding:3px 6px;color:#ccc;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn{background:#444;border:1px solid #666;border-radius:3px;color:#ddd;cursor:pointer;font-size:11px;padding:3px 8px;white-space:nowrap}
+.btn:hover{background:#555}
+.btn-accent{background:#1a5c1a;border-color:#2a8c2a;color:#fff}
+.btn-accent:hover{background:#1e6e1e}
+.settings-row{display:flex;align-items:center;gap:12px}
+.setting-item{display:flex;align-items:center;gap:5px}
+.setting-item input[type="number"]{background:#333;border:1px solid #555;border-radius:3px;color:#ddd;font-size:11px;padding:4px 6px;width:65px;text-align:right}
+.category-bar{background:#252525;border-bottom:1px solid #444;display:flex;flex-wrap:wrap;gap:4px;padding:6px 8px;flex-shrink:0}
+.category-btn{background:#333;border:1px solid #555;border-radius:4px;color:#bbb;cursor:pointer;font-size:11px;padding:4px 10px}
+.category-btn.active{background:#0055aa;border-color:#0077dd;color:#fff}
+.category-count{background:#555;border-radius:8px;font-size:10px;margin-left:3px;padding:1px 5px}
+.category-btn.active .category-count{background:#0077dd}
+.se-container{flex:1;overflow-y:auto;padding:8px}
+.se-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+.se-item{background:#2d2d2d;border:1px solid #484848;border-radius:4px;cursor:pointer;padding:8px 6px;text-align:center;min-height:44px;display:flex;align-items:center;justify-content:center;user-select:none}
+.se-item:hover{background:#3a3a3a;border-color:#0077dd}
+.se-item:active{background:#0055aa}
+.se-item.selected{background:#1a3a1a;border-color:#2a8c2a;border-width:2px}
+.se-item.selected:hover{background:#1e4a1e}
+.se-name{font-size:11px;color:#ccc;line-height:1.3;word-break:break-all}
+.se-item.selected .se-name{color:#fff}
+.empty-state{color:#666;font-size:12px;padding:40px 20px;text-align:center;line-height:2}
+.preview-bar{background:#222;border-top:1px solid #444;padding:6px 10px;display:flex;align-items:center;gap:8px;flex-shrink:0}
+.preview-name{flex:1;color:#888;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.preview-name.active{color:#4af}
+.btn-preview{background:#333;border:1px solid #555;border-radius:20px;color:#ddd;cursor:pointer;font-size:14px;padding:4px 14px;min-width:36px}
+.btn-preview:hover{background:#444}
+.btn-preview.playing{background:#1a4a1a;border-color:#2a8c2a;color:#4f4}
+.statusbar{background:#1a1a1a;border-top:1px solid #383838;color:#888;font-size:10px;padding:3px 10px;flex-shrink:0}
+.statusbar.ok{color:#4a4}
+.statusbar.err{color:#a44}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:#1e1e1e}
+::-webkit-scrollbar-thumb{background:#444;border-radius:3px}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="header-row">
+    <span class="header-label">SEフォルダ:</span>
+    <div class="folder-path" id="folderPath">未選択</div>
+    <button class="btn" onclick="selectFolder()">選択</button>
+    <button class="btn" onclick="reloadFolder()">↺</button>
+    <button class="btn btn-accent" onclick="normalizeFolder()">正規化</button>
+  </div>
+  <div class="settings-row">
+    <div class="setting-item">
+      <span class="header-label">トラック オーディオ A</span>
+      <input type="number" id="trackIndex" value="3" min="1" max="99">
+    </div>
+  </div>
+</div>
+<div class="category-bar" id="categoryBar"><div style="color:#666;font-size:11px;padding:4px 8px;">フォルダを選択してください</div></div>
+<div class="se-container">
+  <div id="seGrid" class="se-grid"></div>
+  <div id="emptyState" class="empty-state">上のフォルダ選択ボタンから<br>SEフォルダを指定してください</div>
+</div>
+<div class="preview-bar">
+  <span class="preview-name" id="previewName">右クリックでSEを選択</span>
+  <button class="btn-preview" id="previewBtn" onclick="togglePreview()">▶</button>
+</div>
+<div class="statusbar" id="statusbar">準備完了</div>
+
+<script src="CSInterface.js"></script>
+<script>
+var cs = new CSInterface();
+var fs = require('fs');
+var path = require('path');
+var { execSync } = require('child_process');
+
+var state = {
+  rootFolder: localStorage.getItem('sepanel_folder') || '',
+  categories: [],
+  activeCategory: 0,
+  trackIndex: parseInt(localStorage.getItem('sepanel_track') || '3'),
+  selectedFile: null,
+  selectedEl: null,
+  audio: null,
+  playing: false
+};
+
+window.onload = function() {
+  document.getElementById('trackIndex').value = state.trackIndex;
+  if (state.rootFolder) {
+    document.getElementById('folderPath').textContent = state.rootFolder;
+    loadFolder(state.rootFolder);
+  }
+};
+
+function selectFolder() {
+  var p = prompt('SEフォルダのパスを入力:', state.rootFolder || '');
+  if (p) {
+    p = p.trim();
+    state.rootFolder = p;
+    localStorage.setItem('sepanel_folder', p);
+    document.getElementById('folderPath').textContent = p;
+    loadFolder(p);
+  }
+}
+
+function reloadFolder() {
+  if (state.rootFolder) { loadFolder(state.rootFolder); setStatus('再読み込みしました', 'ok'); }
+}
+
+function normalizeFolder() {
+  var src = state.rootFolder;
+  if (!src) { setStatus('先にSEフォルダを選択してください', 'err'); return; }
+  if (src.endsWith('_normalized')) { setStatus('すでに正規化フォルダです', 'err'); return; }
+  var dst = src + '_normalized';
+  setStatus('正規化中...（時間がかかります）');
+  setTimeout(function() {
+    try {
+      var exts = ['.wav', '.mp3', '.aif', '.aiff', '.m4a'];
+      var files = getAllAudioFiles(src, exts);
+      var count = 0;
+      files.forEach(function(srcPath) {
+        var rel = srcPath.slice(src.length);
+        var dstPath = dst + rel.replace(/\.[^.]+$/, '.mp3');
+        var dir = path.dirname(dstPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, {recursive: true});
+        try {
+          execSync('ffmpeg -y -i "' + srcPath + '" -af loudnorm=I=-14:TP=-1.5:LRA=11 -ar 44100 "' + dstPath + '"', {stdio: 'pipe'});
+          count++;
+        } catch(e) {}
+      });
+      setStatus('正規化完了！' + count + '件 → ' + dst, 'ok');
+      state.rootFolder = dst;
+      localStorage.setItem('sepanel_folder', dst);
+      document.getElementById('folderPath').textContent = dst;
+      loadFolder(dst);
+    } catch(e) {
+      setStatus('エラー: ' + e.message, 'err');
+    }
+  }, 100);
+}
+
+function getAllAudioFiles(dir, exts) {
+  var result = [];
+  fs.readdirSync(dir).forEach(function(f) {
+    if (f.startsWith('.')) return;
+    var fp = path.join(dir, f);
+    if (fs.statSync(fp).isDirectory()) {
+      getAllAudioFiles(fp, exts).forEach(function(x){ result.push(x); });
+    } else if (exts.indexOf(path.extname(f).toLowerCase()) !== -1) {
+      result.push(fp);
+    }
+  });
+  return result;
+}
+
+function loadFolder(rootPath) {
+  try {
+    if (!fs.existsSync(rootPath)) { setStatus('フォルダが見つかりません: ' + rootPath, 'err'); return; }
+    var cats = [];
+    fs.readdirSync(rootPath).forEach(function(e) {
+      var ep = path.join(rootPath, e);
+      if (fs.statSync(ep).isDirectory() && !e.startsWith('.')) cats.push({name:e, path:ep, files:getAudioFiles(ep)});
+    });
+    cats.sort(function(a,b){ return a.name.localeCompare(b.name,'ja'); });
+    state.categories = cats; state.activeCategory = 0;
+    stopPreview();
+    renderCategories(); renderSEGrid();
+    setStatus(cats.length + 'カテゴリ / ' + cats.reduce(function(s,c){return s+c.files.length;},0) + '件', 'ok');
+  } catch(e) { setStatus('エラー: ' + e.message, 'err'); }
+}
+
+function getAudioFiles(dir) {
+  var exts = ['.wav','.mp3','.aif','.aiff','.m4a','.ogg','.flac'];
+  try {
+    return fs.readdirSync(dir).filter(function(f){ return exts.indexOf(path.extname(f).toLowerCase()) !== -1 && !f.startsWith('.'); })
+      .map(function(f){ return {name: path.basename(f, path.extname(f)), fullPath: path.join(dir, f)}; });
+  } catch(e) { return []; }
+}
+
+function renderCategories() {
+  var bar = document.getElementById('categoryBar');
+  if (!state.categories.length) { bar.innerHTML = '<div style="color:#666;font-size:11px;padding:4px 8px;">サブフォルダが見つかりません</div>'; return; }
+  bar.innerHTML = state.categories.map(function(cat, idx) {
+    return '<button class="category-btn ' + (idx===state.activeCategory?'active':'') + '" onclick="selectCategory(' + idx + ')">' + esc(cat.name.replace(/^\d+_/, '')) + '<span class="category-count">' + cat.files.length + '</span></button>';
+  }).join('');
+}
+
+function selectCategory(idx) {
+  state.activeCategory = idx;
+  stopPreview();
+  state.selectedFile = null;
+  state.selectedEl = null;
+  document.getElementById('previewName').textContent = '右クリックでSEを選択';
+  document.getElementById('previewName').classList.remove('active');
+  renderCategories(); renderSEGrid();
+}
+
+function renderSEGrid() {
+  var grid = document.getElementById('seGrid');
+  var empty = document.getElementById('emptyState');
+  if (!state.categories.length) { grid.innerHTML = ''; empty.style.display = 'block'; return; }
+  var cat = state.categories[state.activeCategory];
+  if (!cat || !cat.files.length) { grid.innerHTML = ''; empty.style.display = 'block'; empty.textContent = 'このカテゴリにSEがありません'; return; }
+  empty.style.display = 'none';
+  grid.innerHTML = cat.files.map(function(f) {
+    return '<div class="se-item" onclick="insertSE(\'' + escAttr(f.fullPath) + '\')" oncontextmenu="selectSE(event, this, \'' + escAttr(f.fullPath) + '\', \'' + escAttr(f.name) + '\')" title="右クリック:プレビュー選択 / クリック:配置"><span class="se-name">' + esc(f.name) + '</span></div>';
+  }).join('');
+}
+
+// 右クリックでSEを選択状態に
+function selectSE(e, el, filePath, name) {
+  e.preventDefault();
+  stopPreview();
+  if (state.selectedEl) state.selectedEl.classList.remove('selected');
+  state.selectedEl = el;
+  state.selectedFile = filePath;
+  el.classList.add('selected');
+  document.getElementById('previewName').textContent = name;
+  document.getElementById('previewName').classList.add('active');
+}
+
+// プレビュー再生/停止
+function togglePreview() {
+  if (!state.selectedFile) {
+    setStatus('右クリックでSEを選択してください', 'err');
+    return;
+  }
+  if (state.playing) {
+    stopPreview();
+  } else {
+    startPreview();
+  }
+}
+
+function startPreview() {
+  stopPreview();
+  try {
+    state.audio = new Audio('file://' + state.selectedFile);
+    state.audio.onended = function() { stopPreview(); };
+    state.audio.onerror = function() { setStatus('再生エラー', 'err'); stopPreview(); };
+    state.audio.play();
+    state.playing = true;
+    document.getElementById('previewBtn').textContent = '■';
+    document.getElementById('previewBtn').classList.add('playing');
+    setStatus('プレビュー再生中: ' + document.getElementById('previewName').textContent);
+  } catch(e) {
+    setStatus('再生エラー: ' + e.message, 'err');
+  }
+}
+
+function stopPreview() {
+  if (state.audio) {
+    state.audio.pause();
+    state.audio.currentTime = 0;
+    state.audio = null;
+  }
+  state.playing = false;
+  document.getElementById('previewBtn').textContent = '▶';
+  document.getElementById('previewBtn').classList.remove('playing');
+}
+
+function insertSE(filePath) {
+  var trackIndex = parseInt(document.getElementById('trackIndex').value) || 3;
+  localStorage.setItem('sepanel_track', trackIndex);
+  setStatus('挿入中...');
+  stopPreview();
+
+  var fp = filePath.replace(/\\/g, '/').replace(/"/g, '\\"');
+  var audioTrackIndex = trackIndex - 1;
+
+  var script = '(function(){' +
+    'try{' +
+    'var proj=app.project;' +
+    'var seq=proj.activeSequence;' +
+    'var root=proj.rootItem;' +
+    'var item=null;' +
+    'for(var i=0;i<root.children.numItems;i++){' +
+    'var ch=root.children[i];' +
+    'if(ch.getMediaPath&&ch.getMediaPath()==="' + fp + '"){item=ch;break;}' +
+    '}' +
+    'if(!item){' +
+    'proj.importFiles(["' + fp + '"],true,root,false);' +
+    'for(var i2=0;i2<root.children.numItems;i2++){' +
+    'var ch2=root.children[i2];' +
+    'if(ch2.getMediaPath&&ch2.getMediaPath()==="' + fp + '"){item=ch2;break;}' +
+    '}' +
+    '}' +
+    'if(!item)return "ERROR: インポート失敗";' +
+    'var time=seq.getPlayerPosition();' +
+    'var track=seq.audioTracks[' + audioTrackIndex + '];' +
+    'track.insertClip(item,time);' +
+    'return "OK";' +
+    '}catch(e){return "ERROR: "+e.message;}' +
+    '})()';
+
+  cs.evalScript(script, function(result) {
+    if (result && result.indexOf('OK') === 0) setStatus('✓ 挿入完了', 'ok');
+    else setStatus('✗ ' + (result || '失敗'), 'err');
+  });
+}
+
+function setStatus(msg, type) { var b = document.getElementById('statusbar'); b.textContent = msg; b.className = 'statusbar' + (type ? ' ' + type : ''); }
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escAttr(s) { return String(s).replace(/'/g,"\\'"); }
+</script>
+</body>
+</html>
