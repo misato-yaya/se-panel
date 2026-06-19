@@ -35,6 +35,27 @@ sudo cp -r "$SCRIPT_DIR/$PANEL_NAME" "$INSTALL_DIR/"
 echo "  ✓ 完了"
 
 echo ""
+echo "▶ Step 4: ffmpegの確認..."
+if command -v ffmpeg &>/dev/null; then
+  echo "  ✓ ffmpegはすでにインストールされています"
+else
+  echo ""
+  echo "  ffmpegは音量の自動統一機能に必要です。"
+  read -p "  ffmpegをインストールしますか？ (y/n): " yn
+  if [ "$yn" = "y" ] || [ "$yn" = "Y" ]; then
+    if ! command -v brew &>/dev/null; then
+      echo "  Homebrewをインストールしています..."
+      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    fi
+    echo "  ffmpegをインストールしています..."
+    brew install ffmpeg
+    echo "  ✓ ffmpegインストール完了"
+  else
+    echo "  スキップしました（後で brew install ffmpeg で追加できます）"
+  fi
+fi
+
+echo ""
 echo "=============================="
 echo "  インストール完了！"
 echo "=============================="
