@@ -99,14 +99,23 @@ window.onload = function() {
   }
 };
 
+// Finderでフォルダ選択
 function selectFolder() {
-  var p = prompt('SEフォルダのパスを入力:', state.rootFolder || '');
-  if (p) {
-    p = p.trim();
-    state.rootFolder = p;
-    localStorage.setItem('sepanel_folder', p);
-    document.getElementById('folderPath').textContent = p;
-    loadFolder(p);
+  try {
+    var result = execSync(
+      'osascript -e \'set f to choose folder with prompt "SEフォルダを選択してください"\' -e \'POSIX path of f\'',
+      {encoding: 'utf8'}
+    ).trim();
+    if (result) {
+      // 末尾のスラッシュを除去
+      result = result.replace(/\/$/, '');
+      state.rootFolder = result;
+      localStorage.setItem('sepanel_folder', result);
+      document.getElementById('folderPath').textContent = result;
+      loadFolder(result);
+    }
+  } catch(e) {
+    // キャンセルされた場合は何もしない
   }
 }
 
@@ -131,11 +140,20 @@ function normalizeFolder() {
         var dir = path.dirname(dstPath);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, {recursive: true});
         try {
-          execSync('ffmpeg -y -i "' + srcPath + '" -af loudnorm=I=-14:TP=-1.5:LRA=11 -ar 44100 "' + dstPath + '"', {stdio: 'pipe'});
+          var probe = execSync('ffmpeg -i "' + srcPath + '" -af volumedetect -f null /dev/null 2>&1', {encoding: 'utf8'});
+          var maxVol = 0.0;
+          probe.split('\n').forEach(function(line) {
+            if (line.indexOf('max_volume') !== -1) {
+              var m = line.match(/([-\d.]+)\s*dB/);
+              if (m) maxVol = parseFloat(m[1]);
+            }
+          });
+          var gain = -14.0 - maxVol;
+          execSync('ffmpeg -y -i "' + srcPath + '" -af volume=' + gain + 'dB -ar 44100 "' + dstPath + '"', {stdio: 'pipe'});
           count++;
         } catch(e) {}
       });
-      setStatus('正規化完了！' + count + '件 → ' + dst, 'ok');
+      setStatus('正規化完了！' + count + '件', 'ok');
       state.rootFolder = dst;
       localStorage.setItem('sepanel_folder', dst);
       document.getElementById('folderPath').textContent = dst;
@@ -214,7 +232,6 @@ function renderSEGrid() {
   }).join('');
 }
 
-// 右クリックでSEを選択状態に
 function selectSE(e, el, filePath, name) {
   e.preventDefault();
   stopPreview();
@@ -226,17 +243,9 @@ function selectSE(e, el, filePath, name) {
   document.getElementById('previewName').classList.add('active');
 }
 
-// プレビュー再生/停止
 function togglePreview() {
-  if (!state.selectedFile) {
-    setStatus('右クリックでSEを選択してください', 'err');
-    return;
-  }
-  if (state.playing) {
-    stopPreview();
-  } else {
-    startPreview();
-  }
+  if (!state.selectedFile) { setStatus('右クリックでSEを選択してください', 'err'); return; }
+  if (state.playing) { stopPreview(); } else { startPreview(); }
 }
 
 function startPreview() {
@@ -250,17 +259,11 @@ function startPreview() {
     document.getElementById('previewBtn').textContent = '■';
     document.getElementById('previewBtn').classList.add('playing');
     setStatus('プレビュー再生中: ' + document.getElementById('previewName').textContent);
-  } catch(e) {
-    setStatus('再生エラー: ' + e.message, 'err');
-  }
+  } catch(e) { setStatus('再生エラー: ' + e.message, 'err'); }
 }
 
 function stopPreview() {
-  if (state.audio) {
-    state.audio.pause();
-    state.audio.currentTime = 0;
-    state.audio = null;
-  }
+  if (state.audio) { state.audio.pause(); state.audio.currentTime = 0; state.audio = null; }
   state.playing = false;
   document.getElementById('previewBtn').textContent = '▶';
   document.getElementById('previewBtn').classList.remove('playing');
@@ -271,10 +274,8 @@ function insertSE(filePath) {
   localStorage.setItem('sepanel_track', trackIndex);
   setStatus('挿入中...');
   stopPreview();
-
   var fp = filePath.replace(/\\/g, '/').replace(/"/g, '\\"');
   var audioTrackIndex = trackIndex - 1;
-
   var script = '(function(){' +
     'try{' +
     'var proj=app.project;' +
@@ -299,7 +300,6 @@ function insertSE(filePath) {
     'return "OK";' +
     '}catch(e){return "ERROR: "+e.message;}' +
     '})()';
-
   cs.evalScript(script, function(result) {
     if (result && result.indexOf('OK') === 0) setStatus('✓ 挿入完了', 'ok');
     else setStatus('✗ ' + (result || '失敗'), 'err');
