@@ -2,9 +2,10 @@
 
 set -e
 
-PANEL_NAME="SE-Panel"
 INSTALL_DIR="/Library/Application Support/Adobe/CEP/extensions"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PANEL_DIR="$INSTALL_DIR/SE-Panel"
+BASE_URL="https://raw.githubusercontent.com/misato-yaya/se-panel/main/SE-Panel"
+TEMP_DIR=$(mktemp -d)
 
 echo ""
 echo "=============================="
@@ -19,19 +20,22 @@ done
 echo "  ✓ 完了"
 
 echo ""
-echo "▶ Step 2: CSInterface.js をダウンロードしています..."
-CSINTERFACE_URL="https://raw.githubusercontent.com/Adobe-CEP/CEP-Resources/master/CEP_11.x/CSInterface.js"
-if curl -sf -o "$SCRIPT_DIR/$PANEL_NAME/CSInterface.js" "$CSINTERFACE_URL"; then
-  echo "  ✓ 完了"
-else
-  echo "  ✗ ダウンロード失敗。インターネット接続を確認してください。"
-  exit 1
-fi
+echo "▶ Step 2: ファイルをダウンロードしています..."
+mkdir -p "$TEMP_DIR/SE-Panel/CSXS"
+mkdir -p "$TEMP_DIR/SE-Panel/jsx"
+
+curl -sf -o "$TEMP_DIR/SE-Panel/index.html" "$BASE_URL/index.html" || { echo "  ✗ 失敗"; exit 1; }
+curl -sf -o "$TEMP_DIR/SE-Panel/CSXS/manifest.xml" "$BASE_URL/CSXS/manifest.xml" || { echo "  ✗ 失敗"; exit 1; }
+curl -sf -o "$TEMP_DIR/SE-Panel/jsx/host.jsx" "$BASE_URL/jsx/host.jsx" || { echo "  ✗ 失敗"; exit 1; }
+curl -sf -o "$TEMP_DIR/SE-Panel/CSInterface.js" "https://raw.githubusercontent.com/Adobe-CEP/CEP-Resources/master/CEP_11.x/CSInterface.js" || { echo "  ✗ 失敗"; exit 1; }
+echo "  ✓ 完了"
 
 echo ""
 echo "▶ Step 3: SE Panel をインストールしています..."
 sudo mkdir -p "$INSTALL_DIR"
-sudo cp -r "$SCRIPT_DIR/$PANEL_NAME" "$INSTALL_DIR/"
+sudo rm -rf "$PANEL_DIR"
+sudo cp -r "$TEMP_DIR/SE-Panel" "$PANEL_DIR"
+rm -rf "$TEMP_DIR"
 echo "  ✓ 完了"
 
 echo ""
@@ -47,11 +51,10 @@ else
       echo "  Homebrewをインストールしています..."
       /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     fi
-    echo "  ffmpegをインストールしています..."
     brew install ffmpeg
     echo "  ✓ ffmpegインストール完了"
   else
-    echo "  スキップしました（後で brew install ffmpeg で追加できます）"
+    echo "  スキップしました"
   fi
 fi
 
@@ -63,6 +66,6 @@ echo ""
 echo "次のステップ："
 echo "  1. Premiere Pro を再起動"
 echo "  2. ウィンドウ → エクステンション → SE Panel を開く"
-echo "  3. 「選択」でSEフォルダを指定"
+echo "  3. 「選択」でSEフォルダのパスを入力"
 echo "  4. 「正規化」で音量を統一（初回のみ）"
 echo ""
