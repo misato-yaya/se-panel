@@ -80,6 +80,26 @@ var fs = require('fs');
 var path = require('path');
 var { execSync } = require('child_process');
 
+// ffmpegの実行パスを候補から自動検出
+var FFMPEG_CANDIDATES = [
+  'ffmpeg',
+  '/opt/homebrew/bin/ffmpeg',
+  '/usr/local/bin/ffmpeg',
+  '/usr/bin/ffmpeg'
+];
+var FFMPEG_PATH = null;
+function findFfmpeg() {
+  if (FFMPEG_PATH) return FFMPEG_PATH;
+  for (var i = 0; i < FFMPEG_CANDIDATES.length; i++) {
+    try {
+      execSync('"' + FFMPEG_CANDIDATES[i] + '" -version', {stdio: 'pipe'});
+      FFMPEG_PATH = FFMPEG_CANDIDATES[i];
+      return FFMPEG_PATH;
+    } catch(e) {}
+  }
+  return null;
+}
+
 var state = {
   rootFolder: localStorage.getItem('sepanel_folder') || '',
   categories: [],
@@ -99,7 +119,6 @@ window.onload = function() {
   }
 };
 
-// Finderでフォルダ選択
 function selectFolder() {
   try {
     var result = execSync(
@@ -107,16 +126,13 @@ function selectFolder() {
       {encoding: 'utf8'}
     ).trim();
     if (result) {
-      // 末尾のスラッシュを除去
       result = result.replace(/\/$/, '');
       state.rootFolder = result;
       localStorage.setItem('sepanel_folder', result);
       document.getElementById('folderPath').textContent = result;
       loadFolder(result);
     }
-  } catch(e) {
-    // キャンセルされた場合は何もしない
-  }
+  } catch(e) {}
 }
 
 function reloadFolder() {
@@ -127,6 +143,13 @@ function normalizeFolder() {
   var src = state.rootFolder;
   if (!src) { setStatus('先にSEフォルダを選択してください', 'err'); return; }
   if (src.endsWith('_normalized')) { setStatus('すでに正規化フォルダです', 'err'); return; }
+
+  var ffmpeg = findFfmpeg();
+  if (!ffmpeg) {
+    setStatus('✗ ffmpegが見つかりません。brew install ffmpeg でインストールしてください', 'err');
+    return;
+  }
+
   var dst = src + '_normalized';
   setStatus('正規化中...（時間がかかります）');
   setTimeout(function() {
@@ -134,13 +157,14 @@ function normalizeFolder() {
       var exts = ['.wav', '.mp3', '.aif', '.aiff', '.m4a'];
       var files = getAllAudioFiles(src, exts);
       var count = 0;
+      var failed = 0;
       files.forEach(function(srcPath) {
         var rel = srcPath.slice(src.length);
         var dstPath = dst + rel.replace(/\.[^.]+$/, '.mp3');
         var dir = path.dirname(dstPath);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, {recursive: true});
         try {
-          var probe = execSync('ffmpeg -i "' + srcPath + '" -af volumedetect -f null /dev/null 2>&1', {encoding: 'utf8'});
+          var probe = execSync('"' + ffmpeg + '" -i "' + srcPath + '" -af volumedetect -f null /dev/null 2>&1', {encoding: 'utf8'});
           var maxVol = 0.0;
           probe.split('\n').forEach(function(line) {
             if (line.indexOf('max_volume') !== -1) {
@@ -149,11 +173,15 @@ function normalizeFolder() {
             }
           });
           var gain = -14.0 - maxVol;
-          execSync('ffmpeg -y -i "' + srcPath + '" -af volume=' + gain + 'dB -ar 44100 "' + dstPath + '"', {stdio: 'pipe'});
+          execSync('"' + ffmpeg + '" -y -i "' + srcPath + '" -af volume=' + gain + 'dB -ar 44100 "' + dstPath + '"', {stdio: 'pipe'});
           count++;
-        } catch(e) {}
+        } catch(e) { failed++; }
       });
-      setStatus('正規化完了！' + count + '件', 'ok');
+      if (count === 0 && failed > 0) {
+        setStatus('✗ 正規化失敗（' + failed + '件）。ffmpegの動作を確認してください', 'err');
+        return;
+      }
+      setStatus('正規化完了！' + count + '件' + (failed ? '（失敗' + failed + '件）' : ''), 'ok');
       state.rootFolder = dst;
       localStorage.setItem('sepanel_folder', dst);
       document.getElementById('folderPath').textContent = dst;
