@@ -3,7 +3,6 @@
 set -e
 
 INSTALL_DIR="/Library/Application Support/Adobe/CEP/extensions"
-PANEL_DIR="$INSTALL_DIR/SE-Panel"
 BASE_URL="https://raw.githubusercontent.com/misato-yaya/se-panel/main/SE-Panel"
 TEMP_DIR=$(mktemp -d)
 
@@ -33,8 +32,8 @@ echo "  ✓ 完了"
 echo ""
 echo "▶ Step 3: SE Panel をインストールしています..."
 sudo mkdir -p "$INSTALL_DIR"
-sudo rm -rf "$PANEL_DIR"
-sudo cp -r "$TEMP_DIR/SE-Panel" "$PANEL_DIR"
+sudo rm -rf "$INSTALL_DIR/SE-Panel"
+sudo cp -r "$TEMP_DIR/SE-Panel" "$INSTALL_DIR/SE-Panel"
 rm -rf "$TEMP_DIR"
 echo "  ✓ 完了"
 
@@ -50,11 +49,22 @@ else
     if ! command -v brew &>/dev/null; then
       echo "  Homebrewをインストールしています..."
       /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      # Homebrewインストール直後はこのセッションのPATHにまだ反映されていないため、明示的に読み込む
+      if [ -x /opt/homebrew/bin/brew ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+      elif [ -x /usr/local/bin/brew ]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+      fi
     fi
-    brew install ffmpeg
-    echo "  ✓ ffmpegインストール完了"
+
+    if command -v brew &>/dev/null; then
+      brew install ffmpeg
+      echo "  ✓ ffmpegインストール完了"
+    else
+      echo "  ✗ brewコマンドが見つかりませんでした。ターミナルを一度閉じて開き直し、'brew install ffmpeg' を手動で実行してください"
+    fi
   else
-    echo "  スキップしました"
+    echo "  スキップしました（後で brew install ffmpeg で追加できます）"
   fi
 fi
 
@@ -67,5 +77,5 @@ echo "次のステップ："
 echo "  1. Premiere Pro を再起動"
 echo "  2. ウィンドウ → エクステンション → SE Panel を開く"
 echo "  3. 「選択」でSEフォルダのパスを入力"
-echo "  4. 「正規化」で音量を統一（初回のみ）"
+echo "  4. 「音量調整」で音量を統一（初回のみ）"
 echo ""
