@@ -288,11 +288,16 @@ function loadFolder(rootPath) {
   try {
     if (!fs.existsSync(rootPath)) { setStatus('フォルダが見つかりません: ' + rootPath, 'err'); return; }
     var cats = [];
+    var rootFiles = getAudioFiles(rootPath);
     fs.readdirSync(rootPath).forEach(function(e) {
       var ep = path.join(rootPath, e);
       if (fs.statSync(ep).isDirectory() && !e.startsWith('.')) cats.push({name:e, path:ep, files:getAudioFiles(ep)});
     });
     cats.sort(function(a,b){ return a.name.localeCompare(b.name,'ja'); });
+    // フォルダ直下に音声ファイルがあれば「未分類」カテゴリとして追加（先頭に配置）
+    if (rootFiles.length) {
+      cats.unshift({name:'未分類', path:rootPath, files:rootFiles});
+    }
     state.categories = cats; state.activeCategory = 0;
     stopPreview();
     renderCategories(); renderSEGrid();
