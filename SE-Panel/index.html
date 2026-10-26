@@ -19,7 +19,6 @@ body{background:#1e1e1e;color:#d4d4d4;font-family:-apple-system,"Hiragino Sans",
 select.trackSelect{background:#333;border:1px solid #555;border-radius:3px;color:#ddd;font-size:11px;padding:3px 6px}
 .sep{color:#555}
 .chk{display:flex;align-items:center;gap:5px;color:#999;font-size:11px;white-space:nowrap}
-.copy-path{flex:1;min-width:80px;background:#333;border:1px solid #555;border-radius:3px;color:#ccc;font-size:11px;padding:3px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .category-bar{background:#252525;border-bottom:1px solid #444;display:flex;flex-wrap:wrap;gap:4px;padding:5px 8px;flex-shrink:0}
 .category-btn{background:#333;border:1px solid #555;border-radius:4px;color:#bbb;cursor:pointer;font-size:11px;padding:3px 9px}
 .category-btn.active{background:#0055aa;border-color:#0077dd;color:#fff}
@@ -44,6 +43,7 @@ select.trackSelect{background:#333;border:1px solid #555;border-radius:3px;color
 .statusbar{background:#1a1a1a;border-top:1px solid #383838;color:#888;font-size:10px;padding:3px 10px;flex-shrink:0}
 .statusbar.ok{color:#4a4}
 .statusbar.err{color:#a44}
+.statusbar.warn{color:#c90}
 ::-webkit-scrollbar{width:6px}
 ::-webkit-scrollbar-track{background:#1e1e1e}
 ::-webkit-scrollbar-thumb{background:#444;border-radius:3px}
@@ -64,10 +64,7 @@ select.trackSelect{background:#333;border:1px solid #555;border-radius:3px;color
     <select class="trackSelect" id="trackIndex"></select>
     <button class="btn" onclick="refreshTrackList()" title="トラック数を再取得">↻</button>
     <span class="sep">|</span>
-    <input type="checkbox" id="copyToProject" checked>
-    <span class="lbl">コピー</span>
-    <div class="copy-path" id="copyPath">未設定</div>
-    <button class="btn" onclick="selectCopyFolder()">指定</button>
+    <label class="chk" title="制作フォルダ（.prprojの1つ上）の 02_footage/SE にコピーしてから配置します"><input type="checkbox" id="copyToProject" checked>制作フォルダにコピー</label>
   </div>
 </div>
 <div class="category-bar" id="categoryBar"><div style="color:#666;font-size:11px;padding:4px 8px;">フォルダを選択してください</div></div>
@@ -100,7 +97,6 @@ function findFfmpeg() {
 
 var state = {
   rootFolder: localStorage.getItem('sepanel_folder') || '',
-  copyFolder: localStorage.getItem('sepanel_copy_folder') || '',
   categories: [],
   activeCategory: 0,
   trackIndex: parseInt(localStorage.getItem('sepanel_track') || '3'),
@@ -112,7 +108,6 @@ var state = {
 
 window.onload = function() {
   refreshTrackList();
-  if (state.copyFolder) document.getElementById('copyPath').textContent = state.copyFolder;
   if (state.rootFolder) {
     updateFolderDisplay(state.rootFolder);
     loadFolder(state.rootFolder);
@@ -169,16 +164,6 @@ function selectFolder() {
     localStorage.setItem('sepanel_folder', result);
     updateFolderDisplay(result);
     loadFolder(result);
-  }
-}
-
-function selectCopyFolder() {
-  var result = chooseFolderDialog('SEのコピー先フォルダを選択してください');
-  if (result) {
-    state.copyFolder = result;
-    localStorage.setItem('sepanel_copy_folder', result);
-    document.getElementById('copyPath').textContent = result;
-    setStatus('コピー先を設定しました', 'ok');
   }
 }
 
@@ -338,7 +323,7 @@ function renderSEGrid() {
   if (!cat || !cat.files.length) { grid.innerHTML = ''; empty.style.display = 'block'; empty.textContent = 'このカテゴリにSEがありません'; return; }
   empty.style.display = 'none';
   grid.innerHTML = cat.files.map(function(f) {
-    return '<div class="se-item" data-name="' + escAttr(f.name) + '" onclick="insertSE(\'' + escAttr(f.fullPath) + '\')" oncontextmenu="selectSE(event, this, \'' + escAttr(f.fullPath) + '\', \'' + escAttr(f.name) + '\')" title="右クリック:プレビュー選択 / クリック:配置"><span class="se-name">' + esc(f.name) + '</span></div>';
+    return '<div class="se-item" data-name="' + esc(f.name).replace(/"/g,'&quot;') + '" onclick="insertSE(\'' + escAttr(f.fullPath) + '\')" oncontextmenu="selectSE(event, this, \'' + escAttr(f.fullPath) + '\', \'' + escAttr(f.name) + '\')" title="右クリック:プレビュー選択 / クリック:配置"><span class="se-name">' + esc(f.name) + '</span></div>';
   }).join('');
 }
 
@@ -379,15 +364,87 @@ function stopPreview() {
   document.getElementById('previewBtn').classList.remove('playing');
 }
 
-function copyToProjectFolder(srcPath) {
-  var dstDir = state.copyFolder;
-  if (!dstDir) { setStatus('コピー先が未設定です（「指定」ボタンで設定できます）', 'err'); return; }
-  try {
-    if (!fs.existsSync(dstDir)) fs.mkdirSync(dstDir, {recursive: true});
-    var base = path.basename(srcPath);
-    var dstPath = path.join(dstDir, base);
-    if (!fs.existsSync(dstPath)) fs.copyFileSync(srcPath, dstPath);
-  } catch(e) {}
+// 名前を比べるための形：文字の正規化（NFC）と大文字・小文字をそろえる
+// （Macのファイル名は濁点を分けたNFDのことがある。MacもWindowsも普通は大文字・小文字を区別しない）
+function nameKey(s) {
+  s = String(s);
+  if (typeof s.normalize === 'function') s = s.normalize('NFC');
+  return s.toLowerCase();
+}
+
+// フォルダの中から、名前が同じもの（正規化・大文字小文字の違いは同じとみなす）を探し、実際の名前を返す
+function findEntryName(dir, name) {
+  var key = nameKey(name);
+  var entries;
+  try { entries = fs.readdirSync(dir); } catch(e) { return null; }
+  for (var i = 0; i < entries.length; i++) {
+    if (nameKey(entries[i]) === key) return entries[i];
+  }
+  return null;
+}
+
+// フォルダの中のサブフォルダを返す。無ければ作る
+function ensureSubfolder(dir, name) {
+  var found = findEntryName(dir, name);
+  if (found) {
+    var p = path.join(dir, found);
+    if (!fs.statSync(p).isDirectory()) throw new Error(p + ' がフォルダではありません');
+    return p;
+  }
+  var created = path.join(dir, name);
+  fs.mkdirSync(created);
+  return created;
+}
+
+// Premiereが返すプロジェクトのパスから、Windowsの長いパスの頭（\\?\D:\… ・ \\?\UNC\server\…）を外す
+function cleanProjectPath(p) {
+  return String(p).replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/, '');
+}
+
+// SEのコピー先（制作フォルダ/02_footage/SE）を決める。制作フォルダ = .prprojがあるフォルダの1つ上
+// - .prprojが01_projectの中にある：02_footage/SEが無ければ作る
+// - 01_projectの中でないが、制作フォルダに02_footageがある：そこを使う
+// - どちらでもない：{skip: true}（フォルダは作らず、コピーしない）
+function resolveSEFolder(projectPath) {
+  var projectDir = path.dirname(projectPath);
+  var productionDir = path.dirname(projectDir);
+  var isStandard = nameKey(path.basename(projectDir)) === '01_project';
+  if (!isStandard && !findEntryName(productionDir, '02_footage')) return {skip: true};
+  var footageDir = ensureSubfolder(productionDir, '02_footage');
+  return {dir: ensureSubfolder(footageDir, 'SE')};
+}
+
+function sameContent(a, b) {
+  if (fs.statSync(a).size !== fs.statSync(b).size) return false;
+  return fs.readFileSync(a).equals(fs.readFileSync(b));
+}
+
+// SEをコピー先に入れて、配置に使うファイルのパスを返す
+// 同名で中身も同じなら、すでにあるファイルを使う。中身が違えば「名前_2」「名前_3」…でコピーする（上書きしない）
+function copySEInto(srcPath, dstDir) {
+  var base = path.basename(srcPath);
+  if (typeof base.normalize === 'function') base = base.normalize('NFC');
+  var ext = path.extname(base);
+  var stem = base.slice(0, base.length - ext.length);
+  for (var n = 1; n <= 999; n++) {
+    var name = (n === 1) ? base : stem + '_' + n + ext;
+    var existing = findEntryName(dstDir, name);
+    if (existing) {
+      var existingPath = path.join(dstDir, existing);
+      if (sameContent(srcPath, existingPath)) return existingPath;
+      continue;
+    }
+    var dstPath = path.join(dstDir, name);
+    try {
+      fs.copyFileSync(srcPath, dstPath, fs.constants.COPYFILE_EXCL);
+    } catch(e) {
+      // 途中まで書かれたファイルを残さない（すでにあったファイルは消さない）
+      if (e.code !== 'EEXIST') { try { fs.unlinkSync(dstPath); } catch(e2) {} }
+      throw e;
+    }
+    return dstPath;
+  }
+  throw new Error('同じ名前のファイルが多すぎます: ' + base);
 }
 
 function insertSE(filePath) {
@@ -397,23 +454,54 @@ function insertSE(filePath) {
   localStorage.setItem('sepanel_track', trackIndex);
   setStatus('挿入中...');
   stopPreview();
+  if (!document.getElementById('copyToProject').checked) {
+    placeOnTimeline(filePath, trackIndex, '✓ 挿入完了', 'ok');
+    return;
+  }
+  // コピーしてから配置する。シーケンスが無いときは、コピーする前に止める
+  var script = '(function(){try{if(!app.project.activeSequence)return "NOSEQ";return "PATH:"+(app.project.path||"");}catch(e){return "ERROR: "+e.message;}})()';
+  cs.evalScript(script, function(result) {
+    if (result === 'NOSEQ') { setStatus('✗ アクティブなシーケンスがありません', 'err'); return; }
+    if (!result || result.indexOf('PATH:') !== 0) { setStatus('✗ ' + (result || 'プロジェクトの場所を取得できませんでした'), 'err'); return; }
+    var projectPath = cleanProjectPath(result.slice(5));
+    if (!projectPath) { setStatus('✗ 先にプロジェクトを保存してください', 'err'); return; }
+    var copiedPath;
+    try {
+      var target = resolveSEFolder(projectPath);
+      if (target.skip) {
+        placeOnTimeline(filePath, trackIndex, '⚠ 挿入完了（標準の構成でないため、コピーしていません。制作フォルダ外になります）', 'warn');
+        return;
+      }
+      copiedPath = copySEInto(filePath, target.dir);
+    } catch(e) {
+      setStatus('✗ コピー失敗：' + e.message, 'err');
+      return;
+    }
+    placeOnTimeline(copiedPath, trackIndex, '✓ 挿入完了（制作フォルダにコピー）', 'ok');
+  });
+}
+
+function placeOnTimeline(filePath, trackIndex, okMessage, okType) {
   var fp = filePath.replace(/\\/g, '/').replace(/"/g, '\\"');
   var audioTrackIndex = trackIndex - 1;
+  // getMediaPathはWindowsでは「\」区切りで返るので、区切りと大文字・小文字をそろえて比べる
   var script = '(function(){' +
     'try{' +
+    'var norm=function(p){return String(p).replace(/\\\\/g,"/").toLowerCase();};' +
+    'var target=norm("' + fp + '");' +
     'var proj=app.project;' +
     'var seq=proj.activeSequence;' +
     'var root=proj.rootItem;' +
     'var item=null;' +
     'for(var i=0;i<root.children.numItems;i++){' +
     'var ch=root.children[i];' +
-    'if(ch.getMediaPath&&ch.getMediaPath()==="' + fp + '"){item=ch;break;}' +
+    'if(ch.getMediaPath&&norm(ch.getMediaPath())===target){item=ch;break;}' +
     '}' +
     'if(!item){' +
     'proj.importFiles(["' + fp + '"],true,root,false);' +
     'for(var i2=0;i2<root.children.numItems;i2++){' +
     'var ch2=root.children[i2];' +
-    'if(ch2.getMediaPath&&ch2.getMediaPath()==="' + fp + '"){item=ch2;break;}' +
+    'if(ch2.getMediaPath&&norm(ch2.getMediaPath())===target){item=ch2;break;}' +
     '}' +
     '}' +
     'if(!item)return "ERROR: インポート失敗";' +
@@ -425,13 +513,7 @@ function insertSE(filePath) {
     '})()';
   cs.evalScript(script, function(result) {
     if (result && result.indexOf('OK') === 0) {
-      var copied = document.getElementById('copyToProject').checked;
-      if (copied) {
-        copyToProjectFolder(filePath);
-        setStatus('✓ 挿入完了 → コピー先に保存', 'ok');
-      } else {
-        setStatus('✓ 挿入完了', 'ok');
-      }
+      setStatus(okMessage, okType);
     } else {
       setStatus('✗ ' + (result || '失敗'), 'err');
     }
@@ -440,7 +522,8 @@ function insertSE(filePath) {
 
 function setStatus(msg, type) { var b = document.getElementById('statusbar'); b.textContent = msg; b.className = 'statusbar' + (type ? ' ' + type : ''); }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function escAttr(s) { return String(s).replace(/'/g,"\\'"); }
+// onclick の '…' の中に入れる文字列：Windowsのパスの「\」が消えないように、先に「\」をエスケープする
+function escAttr(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
 </script>
 </body>
 </html>
